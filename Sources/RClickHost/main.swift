@@ -23,6 +23,9 @@ struct MenuConfig: Codable, Equatable {
     var delete: Bool
     var newFiles: [String]
     var authorizedFolders: [String]
+    var folderScopeVersion: Int?
+
+    static let currentFolderScopeVersion = 1
 
     static let `default` = MenuConfig(
         apps: [
@@ -32,7 +35,8 @@ struct MenuConfig: Codable, Equatable {
         copyPath: true,
         delete: true,
         newFiles: ["TXT", "Markdown", "JSON", "DOCX", "PPTX", "XLSX"],
-        authorizedFolders: [NSHomeDirectory()]
+        authorizedFolders: [],
+        folderScopeVersion: MenuConfig.currentFolderScopeVersion
     )
 }
 
@@ -46,13 +50,26 @@ enum ConfigStore {
             save(.default)
             return .default
         }
-        return config
+        let migrated = migrateLegacyFolderScope(config)
+        if migrated != config { save(migrated) }
+        return migrated
     }
 
     static func save(_ config: MenuConfig) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         guard let data = try? JSONEncoder().encode(config) else { return }
         try? data.write(to: url, options: .atomic)
+    }
+
+    private static func migrateLegacyFolderScope(_ config: MenuConfig) -> MenuConfig {
+        guard config.folderScopeVersion == nil else { return config }
+        var migrated = config
+        // v0.1.0 silently monitored the entire home directory by default.
+        if migrated.authorizedFolders == [NSHomeDirectory()] {
+            migrated.authorizedFolders = []
+        }
+        migrated.folderScopeVersion = MenuConfig.currentFolderScopeVersion
+        return migrated
     }
 }
 
@@ -146,6 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: configRequestNotification,
             object: nil
         )
+        publish(config)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "cursorarrow.click.2", accessibilityDescription: "快点菜单")
         let menu = NSMenu()
@@ -310,6 +328,9 @@ struct SettingsView: View {
                 Label("添加文件夹", systemImage: "folder.badge.plus")
             }
             .buttonStyle(.bordered)
+            Text("Finder 菜单仅在已添加的文件夹及其子文件夹中显示。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

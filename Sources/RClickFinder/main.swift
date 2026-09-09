@@ -14,6 +14,14 @@ private struct MenuConfig: Codable {
     let delete: Bool
     let newFiles: [String]
     let authorizedFolders: [String]
+
+    static let inactive = MenuConfig(
+        apps: [],
+        copyPath: false,
+        delete: false,
+        newFiles: [],
+        authorizedFolders: []
+    )
 }
 
 final class FinderSync: FIFinderSync {
@@ -25,7 +33,10 @@ final class FinderSync: FIFinderSync {
 
     override init() {
         NSLog("QuickMenu: initializing")
-        config = Self.loadConfig()
+        // Open and Save panels create separate Finder Sync instances. Do not
+        // read the host app's shared container from those instances; the host
+        // replies to configRequestNotification with an in-memory snapshot.
+        config = .inactive
         super.init()
         NSLog("QuickMenu: loaded %ld apps, %ld folders", config.apps.count, config.authorizedFolders.count)
         updateMonitoredDirectories()
@@ -44,16 +55,17 @@ final class FinderSync: FIFinderSync {
            let updated = try? JSONDecoder().decode(MenuConfig.self, from: data) {
             config = updated
             NSLog("QuickMenu: reloaded %ld apps, %ld folders", config.apps.count, config.authorizedFolders.count)
-        } else {
-            config = Self.loadConfig()
+            updateMonitoredDirectories()
         }
-        updateMonitoredDirectories()
     }
 
     private func updateMonitoredDirectories() {
-        // Monitor globally so Finder asks us for contextual menus in every location;
-        // isAuthorized(_:) still limits the actions to configured folders.
-        FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: "/")]
+        let directories = Set(config.authorizedFolders.map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+        })
+        FIFinderSyncController.default().directoryURLs = directories
     }
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu {
@@ -152,25 +164,6 @@ final class FinderSync: FIFinderSync {
 
     @objc private func createFile(_ sender: NSMenuItem) {
         sendToHost(sender)
-    }
-
-    private static func loadConfig() -> MenuConfig {
-        let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.maolike.rclickreplacement")
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("RClickReplacement", isDirectory: true)
-        let url = directory.appendingPathComponent("menu.json")
-        guard let data = try? Data(contentsOf: url), let config = try? JSONDecoder().decode(MenuConfig.self, from: data) else {
-            return MenuConfig(
-                apps: [
-                    MenuApp(id: UUID(), name: "终端", bundleIdentifier: "com.apple.Terminal"),
-                    MenuApp(id: UUID(), name: "文本编辑", bundleIdentifier: "com.apple.TextEdit")
-                ],
-                copyPath: true,
-                delete: true,
-                newFiles: ["TXT", "Markdown", "JSON", "DOCX", "PPTX", "XLSX"],
-                authorizedFolders: [NSHomeDirectory()]
-            )
-        }
-        return config
     }
 
     private func selectedURLs() -> [URL] {
